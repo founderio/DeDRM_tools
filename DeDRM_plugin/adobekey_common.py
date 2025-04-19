@@ -14,10 +14,12 @@ class ADEPTError(Exception):
 
 
 class Key:
-    encrypted_private_key: bytes = bytes()
-    uuid_name: str = ""
+    def __init__(self):
+        self.encrypted_private_key: bytes = bytes()
+        self.uuid_name: str = ""
 
 
 class KeyMaterial:
-    keykey: bytes = bytes()
-    keys: list[Key] = []
+    def __init__(self):
+        self.keykey: bytes = bytes()
+        self.keys: list[Key] = []

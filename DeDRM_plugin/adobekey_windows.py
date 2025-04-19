@@ -368,7 +368,7 @@ def obtain_key_material() -> KeyMaterial:
             else:
                 key.uuid_name = "_".join(name_components)
 
-        keymaterial.keys.append(key)
+            keymaterial.keys.append(key)
 
     return keymaterial
 
