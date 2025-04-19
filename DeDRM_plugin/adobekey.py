@@ -33,6 +33,7 @@
 #   7.2 - Fix decryption error on Python2 if there's unicode in the username
 #   7.3 - Fix OpenSSL in Wine
 #   7.4 - Remove OpenSSL support to only support PyCryptodome
+#   7.5 - Move Windows-specific code to a separate script to call inside wine, instead of calling the whole script in wine
 
 """
 Retrieve Adobe ADEPT user key.
@@ -44,34 +45,22 @@ __version__ = '7.4'
 import sys, os, struct, getopt
 from base64 import b64decode
 
-#@@CALIBRE_COMPAT_CODE@@
+# @@CALIBRE_COMPAT_CODE@@
 
 
-from .utilities import SafeUnbuffered
-from .argv_utils import unicode_argv
-
+from utilities import SafeUnbuffered
+from argv_utils import unicode_argv
+from adobekey_common import ADEPTError
 
 try:
     from calibre.constants import iswindows, isosx
 except:
     iswindows = sys.platform.startswith('win')
     isosx = sys.platform.startswith('darwin')
+use_wine = not iswindows and not isosx
 
 
-class ADEPTError(Exception):
-    pass
-
-if iswindows:
-    from ctypes import windll, c_char_p, c_wchar_p, c_uint, POINTER, byref, \
-        create_unicode_buffer, create_string_buffer, CFUNCTYPE, addressof, \
-        string_at, Structure, c_void_p, cast, c_size_t, memmove, CDLL, c_int, \
-        c_long, c_ulong
-
-    from ctypes.wintypes import LPVOID, DWORD, BOOL
-    try:
-        import winreg
-    except ImportError:
-        import _winreg as winreg
+if iswindows or use_wine:
 
     try:
         from Cryptodome.Cipher import AES
@@ -86,265 +75,73 @@ if iswindows:
 
         return data[:-pad_len]
 
-    DEVICE_KEY_PATH = r'Software\Adobe\Adept\Device'
-    PRIVATE_LICENCE_KEY_PATH = r'Software\Adobe\Adept\Activation'
+    if use_wine:
+        from adobekey_common import KeyMaterial
 
-    MAX_PATH = 255
+        def obtain_key_material(alfdir: str, wineprefix: str) -> KeyMaterial:
+            scriptpath = os.path.join(alfdir, "adobekey_windows.py")
 
-    kernel32 = windll.kernel32
-    advapi32 = windll.advapi32
-    crypt32 = windll.crypt32
+            from __init__ import PLUGIN_NAME, PLUGIN_VERSION
+            from wineutils import WinePythonCLI, NoWinePython3Exception
+            import pickle
 
-    def GetSystemDirectory():
-        GetSystemDirectoryW = kernel32.GetSystemDirectoryW
-        GetSystemDirectoryW.argtypes = [c_wchar_p, c_uint]
-        GetSystemDirectoryW.restype = c_uint
-        def GetSystemDirectory():
-            buffer = create_unicode_buffer(MAX_PATH + 1)
-            GetSystemDirectoryW(buffer, len(buffer))
-            return buffer.value
-        return GetSystemDirectory
-    GetSystemDirectory = GetSystemDirectory()
-
-    def GetVolumeSerialNumber():
-        GetVolumeInformationW = kernel32.GetVolumeInformationW
-        GetVolumeInformationW.argtypes = [c_wchar_p, c_wchar_p, c_uint,
-                                          POINTER(c_uint), POINTER(c_uint),
-                                          POINTER(c_uint), c_wchar_p, c_uint]
-        GetVolumeInformationW.restype = c_uint
-        def GetVolumeSerialNumber(path):
-            vsn = c_uint(0)
-            GetVolumeInformationW(
-                path, None, 0, byref(vsn), None, None, None, 0)
-            return vsn.value
-        return GetVolumeSerialNumber
-    GetVolumeSerialNumber = GetVolumeSerialNumber()
-
-    def GetUserName():
-        GetUserNameW = advapi32.GetUserNameW
-        GetUserNameW.argtypes = [c_wchar_p, POINTER(c_uint)]
-        GetUserNameW.restype = c_uint
-        def GetUserName():
-            buffer = create_unicode_buffer(32)
-            size = c_uint(len(buffer))
-            while not GetUserNameW(buffer, byref(size)):
-                buffer = create_unicode_buffer(len(buffer) * 2)
-                size.value = len(buffer)
-            return buffer.value.encode('utf-16-le')[::2]
-        return GetUserName
-    GetUserName = GetUserName()
-
-    def GetUserName2():
-        try:
-            from winreg import OpenKey, QueryValueEx, HKEY_CURRENT_USER
-        except ImportError:
-            # We're on Python 2
             try:
-                # The default _winreg on Python2 isn't unicode-safe.
-                # Check if we have winreg_unicode, a unicode-safe alternative. 
-                # Without winreg_unicode, this will fail with Unicode chars in the username.
-                from adobekey_winreg_unicode import OpenKey, QueryValueEx, HKEY_CURRENT_USER
-            except:
-                from _winreg import OpenKey, QueryValueEx, HKEY_CURRENT_USER
+                pyexec = WinePythonCLI(wineprefix)
+            except NoWinePython3Exception:
+                print('{0} v{1}: Unable to find python3 executable in WINEPREFIX="{2}"'.format(PLUGIN_NAME, PLUGIN_VERSION, wineprefix))
+                return KeyMaterial()
 
-        try: 
-            DEVICE_KEY_PATH = r'Software\Adobe\Adept\Device'
-            regkey = OpenKey(HKEY_CURRENT_USER, DEVICE_KEY_PATH)
-            userREG = QueryValueEx(regkey, 'username')[0].encode('utf-16-le')[::2]
-            return userREG
-        except: 
-            return None
+            basepath, script = os.path.split(scriptpath)
+            print(
+                "{0} v{1}: Running {2} under Wine".format(
+                    PLUGIN_NAME, PLUGIN_VERSION, scriptpath
+                )
+            )
 
-    PAGE_EXECUTE_READWRITE = 0x40
-    MEM_COMMIT  = 0x1000
-    MEM_RESERVE = 0x2000
+            outdirpath = os.path.join(basepath, "winekeysdir")
+            outpath = os.path.join(outdirpath, "keymaterial.pickle")
+            if not os.path.exists(outdirpath):
+                os.makedirs(outdirpath)
 
-    def VirtualAlloc():
-        _VirtualAlloc = kernel32.VirtualAlloc
-        _VirtualAlloc.argtypes = [LPVOID, c_size_t, DWORD, DWORD]
-        _VirtualAlloc.restype = LPVOID
-        def VirtualAlloc(addr, size, alloctype=(MEM_COMMIT | MEM_RESERVE),
-                         protect=PAGE_EXECUTE_READWRITE):
-            return _VirtualAlloc(addr, size, alloctype, protect)
-        return VirtualAlloc
-    VirtualAlloc = VirtualAlloc()
+            try:
+                pyexec.check_call([scriptpath, outpath])
+            except Exception as e:
+                print("{0} v{1}: Wine subprocess call error: {2}".format(PLUGIN_NAME, PLUGIN_VERSION, e.args[0]))
 
-    MEM_RELEASE = 0x8000
+            try:
+                with open(outpath, "rb") as keymaterialfile:
+                    keymaterial: KeyMaterial = pickle.load(keymaterialfile)
+            finally:
+                # Make sure to always remove the keymaterial from disk
+                os.remove(outpath)
 
-    def VirtualFree():
-        _VirtualFree = kernel32.VirtualFree
-        _VirtualFree.argtypes = [LPVOID, c_size_t, DWORD]
-        _VirtualFree.restype = BOOL
-        def VirtualFree(addr, size=0, freetype=MEM_RELEASE):
-            return _VirtualFree(addr, size, freetype)
-        return VirtualFree
-    VirtualFree = VirtualFree()
+            return keymaterial
 
-    class NativeFunction(object):
-        def __init__(self, restype, argtypes, insns):
-            self._buf = buf = VirtualAlloc(None, len(insns))
-            memmove(buf, insns, len(insns))
-            ftype = CFUNCTYPE(restype, *argtypes)
-            self._native = ftype(buf)
-
-        def __call__(self, *args):
-            return self._native(*args)
-
-        def __del__(self):
-            if self._buf is not None:
-                try: 
-                    VirtualFree(self._buf)
-                    self._buf = None
-                except TypeError:
-                    # Apparently this sometimes gets cleared on application exit
-                    # Causes a useless exception in the log, so let's just catch and ignore that.
-                    pass
-
-    if struct.calcsize("P") == 4:
-        CPUID0_INSNS = (
-            b"\x53"             # push   %ebx
-            b"\x31\xc0"         # xor    %eax,%eax
-            b"\x0f\xa2"         # cpuid
-            b"\x8b\x44\x24\x08" # mov    0x8(%esp),%eax
-            b"\x89\x18"         # mov    %ebx,0x0(%eax)
-            b"\x89\x50\x04"     # mov    %edx,0x4(%eax)
-            b"\x89\x48\x08"     # mov    %ecx,0x8(%eax)
-            b"\x5b"             # pop    %ebx
-            b"\xc3"             # ret
-        )
-        CPUID1_INSNS = (
-            b"\x53"             # push   %ebx
-            b"\x31\xc0"         # xor    %eax,%eax
-            b"\x40"             # inc    %eax
-            b"\x0f\xa2"         # cpuid
-            b"\x5b"             # pop    %ebx
-            b"\xc3"             # ret
-        )
     else:
-        CPUID0_INSNS = (
-            b"\x49\x89\xd8"     # mov    %rbx,%r8
-            b"\x49\x89\xc9"     # mov    %rcx,%r9
-            b"\x48\x31\xc0"     # xor    %rax,%rax
-            b"\x0f\xa2"         # cpuid
-            b"\x4c\x89\xc8"     # mov    %r9,%rax
-            b"\x89\x18"         # mov    %ebx,0x0(%rax)
-            b"\x89\x50\x04"     # mov    %edx,0x4(%rax)
-            b"\x89\x48\x08"     # mov    %ecx,0x8(%rax)
-            b"\x4c\x89\xc3"     # mov    %r8,%rbx
-            b"\xc3"             # retq
-        )
-        CPUID1_INSNS = (
-            b"\x53"             # push   %rbx
-            b"\x48\x31\xc0"     # xor    %rax,%rax
-            b"\x48\xff\xc0"     # inc    %rax
-            b"\x0f\xa2"         # cpuid
-            b"\x5b"             # pop    %rbx
-            b"\xc3"             # retq
-        )
+        from adobekey_windows import obtain_key_material as _obtain_key_material
+        def obtain_key_material(alfdir: str, wineprefix: str) -> KeyMaterial:
+            return _obtain_key_material()
 
-    def cpuid0():
-        _cpuid0 = NativeFunction(None, [c_char_p], CPUID0_INSNS)
-        buf = create_string_buffer(12)
-        def cpuid0():
-            _cpuid0(buf)
-            return buf.raw
-        return cpuid0
-    cpuid0 = cpuid0()
+    def adeptkeys(alfdir: str, wineprefix: str):
+        """ alfdir and wineprefix are only used when using Wine."""
 
-    cpuid1 = NativeFunction(c_uint, [], CPUID1_INSNS)
+        keymaterial = obtain_key_material(alfdir, wineprefix)
 
-    class DataBlob(Structure):
-        _fields_ = [('cbData', c_uint),
-                    ('pbData', c_void_p)]
-    DataBlob_p = POINTER(DataBlob)
+        if len(keymaterial.keykey) == 0:
+            raise ADEPTError('Could not locate privateLicenseKey')
 
-    def CryptUnprotectData():
-        _CryptUnprotectData = crypt32.CryptUnprotectData
-        _CryptUnprotectData.argtypes = [DataBlob_p, c_wchar_p, DataBlob_p,
-                                       c_void_p, c_void_p, c_uint, DataBlob_p]
-        _CryptUnprotectData.restype = c_uint
-        def CryptUnprotectData(indata, entropy):
-            indatab = create_string_buffer(indata)
-            indata = DataBlob(len(indata), cast(indatab, c_void_p))
-            entropyb = create_string_buffer(entropy)
-            entropy = DataBlob(len(entropy), cast(entropyb, c_void_p))
-            outdata = DataBlob()
-            if not _CryptUnprotectData(byref(indata), None, byref(entropy),
-                                       None, None, 0, byref(outdata)):
-                raise ADEPTError("Failed to decrypt user key key (sic)")
-            return string_at(outdata.pbData, outdata.cbData)
-        return CryptUnprotectData
-    CryptUnprotectData = CryptUnprotectData()
-
-    def adeptkeys():
-        root = GetSystemDirectory().split('\\')[0] + '\\'
-        serial = GetVolumeSerialNumber(root)
-        vendor = cpuid0()
-        signature = struct.pack('>I', cpuid1())[1:]
-        user = GetUserName2()
-        if user is None: 
-            user = GetUserName()
-        entropy = struct.pack('>I12s3s13s', serial, vendor, signature, user)
-        cuser = winreg.HKEY_CURRENT_USER
-        try:
-            regkey = winreg.OpenKey(cuser, DEVICE_KEY_PATH)
-            device = winreg.QueryValueEx(regkey, 'key')[0]
-        except (WindowsError, FileNotFoundError):
-            raise ADEPTError("Adobe Digital Editions not activated")
-        keykey = CryptUnprotectData(device, entropy)
-        userkey = None
         keys = []
         names = []
-        try:
-            plkroot = winreg.OpenKey(cuser, PRIVATE_LICENCE_KEY_PATH)
-        except (WindowsError, FileNotFoundError):
-            raise ADEPTError("Could not locate ADE activation")
 
-        i = -1
-        while True:
-            i = i + 1   # start with 0
-            try:
-                plkparent = winreg.OpenKey(plkroot, "%04d" % (i,))
-            except:
-                # No more keys
-                break
-                
-            ktype = winreg.QueryValueEx(plkparent, None)[0]
-            if ktype != 'credentials':
-                continue
-            uuid_name = ""
-            for j in range(0, 16):
-                try:
-                    plkkey = winreg.OpenKey(plkparent, "%04d" % (j,))
-                except (WindowsError, FileNotFoundError):
-                    break
-                ktype = winreg.QueryValueEx(plkkey, None)[0]
-                if ktype == 'user':
-                    # Add Adobe UUID to key name
-                    uuid_name = uuid_name + winreg.QueryValueEx(plkkey, 'value')[0][9:] + "_"
-                if ktype == 'username':
-                    # Add account type & email to key name, if present
-                    try: 
-                        uuid_name = uuid_name + winreg.QueryValueEx(plkkey, 'method')[0] + "_" 
-                    except:
-                        pass
-                    try: 
-                        uuid_name = uuid_name + winreg.QueryValueEx(plkkey, 'value')[0] + "_"
-                    except:
-                        pass
-                if ktype == 'privateLicenseKey':
-                    userkey = winreg.QueryValueEx(plkkey, 'value')[0]
-                    userkey = unpad(AES.new(keykey, AES.MODE_CBC, b'\x00'*16).decrypt(b64decode(userkey)))[26:]
-                    # print ("found " + uuid_name + " key: " + str(userkey))
-                    keys.append(userkey)
+        for key in keymaterial.keys:
+            decrypted = unpad(
+                AES.new(keymaterial.keykey, AES.MODE_CBC, b"\x00" * 16).decrypt(
+                    b64decode(key.encrypted_private_key)
+                )
+            )[26:]
+            keys.append(decrypted)
+            names.append(key.uuid_name)
 
-            if uuid_name == "":
-                names.append("Unknown")
-            else:
-                names.append(uuid_name[:-1])
-
-        if len(keys) == 0:
-            raise ADEPTError('Could not locate privateLicenseKey')
         print("Found {0:d} keys".format(len(keys)))
         return keys, names
 
@@ -391,12 +188,12 @@ elif isosx:
 
         exprUUID = '//%s/%s' % (adept('credentials'), adept('user'))
         keyName = ""
-        try: 
+        try:
             keyName = tree.findtext(exprUUID)[9:] + "_"
-        except: 
+        except:
             pass
 
-        try: 
+        try:
             exprMail = '//%s/%s' % (adept('credentials'), adept('username'))
             keyName = keyName + tree.find(exprMail).attrib["method"] + "_"
             keyName = keyName + tree.findtext(exprMail) + "_"
@@ -408,15 +205,13 @@ elif isosx:
         else:
             keyName = keyName[:-1]
 
-
-
         userkey = b64decode(userkey)
         userkey = userkey[26:]
         return [userkey], [keyName]
 
 else:
     def adeptkeys():
-        raise ADEPTError("This script only supports Windows and Mac OS X.")
+        raise ADEPTError("This script only supports Windows (or Wine) and Mac OS X.")
         return [], []
 
 # interface for Python DeDRM
@@ -478,7 +273,7 @@ def cli_main():
         # save to the specified file or directory
         outpath = args[0]
         if not os.path.isabs(outpath):
-           outpath = os.path.abspath(outpath)
+            outpath = os.path.abspath(outpath)
     else:
         # save to the same directory as the script
         outpath = os.path.dirname(argv[0])
@@ -486,7 +281,10 @@ def cli_main():
     # make sure the outpath is the
     outpath = os.path.realpath(os.path.normpath(outpath))
 
-    keys, names = adeptkeys()
+    if use_wine:
+        keys, names = adeptkeys(".", "")
+    else:
+        keys, names = adeptkeys()
     if len(keys) > 0:
         if not os.path.isdir(outpath):
             outfile = outpath
@@ -531,14 +329,16 @@ def gui_main():
 
             self.text.insert(tkinter.constants.END, text)
 
-
     argv=unicode_argv("adobekey.py")
     root = tkinter.Tk()
     root.withdraw()
     progpath, progname = os.path.split(argv[0])
     success = False
     try:
-        keys, names = adeptkeys()
+        if use_wine:
+            keys, names = adeptkeys(".", "")
+        else:
+            keys, names = adeptkeys()
         print(keys)
         print(names)
         keycount = 0

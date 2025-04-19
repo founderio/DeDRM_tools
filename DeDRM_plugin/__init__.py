@@ -95,12 +95,12 @@ import traceback
 
 #@@CALIBRE_COMPAT_CODE@@
 
-try: 
-    try: 
+try:
+    try:
         from . import __version
     except:
         import __version
-except: 
+except:
     print("#############################")
     print("Failed to load the DeDRM plugin")
     print("Did you bundle this from source code yourself? If so, you'll need to run make_release.py instead to generate a valid plugin file.")
@@ -119,9 +119,9 @@ except:
 class DeDRMError(Exception):
     pass
 
-try: 
+try:
     from calibre.customize import FileTypePlugin
-except: 
+except:
     # Allow import without Calibre.
     class FileTypePlugin:
         pass
@@ -132,14 +132,14 @@ except:
     iswindows = sys.platform.startswith('win')
     isosx = sys.platform.startswith('darwin')
 
-try: 
+try:
     from calibre.utils.config import config_dir
 except:
     config_dir = ""
 
-try: 
+try:
     from . import utilities
-except: 
+except:
     import utilities
 
 
@@ -164,10 +164,10 @@ class DeDRM(FileTypePlugin):
     def cli_main(self, data):
         from .standalone import main
         main(data)
-    
+
     def initialize(self):
         """
-        Extracting a couple Python scripts if running on Linux, 
+        Extracting a couple Python scripts if running on Linux,
         just in case we need to run them in Wine.
 
         The extraction only happens once per version of the plugin
@@ -191,7 +191,7 @@ class DeDRM(FileTypePlugin):
             self.verdir = os.path.join(self.maindir,PLUGIN_VERSION)
             if not os.path.exists(self.verdir) and not iswindows and not isosx:
 
-                names = ["kindlekey.py","adobekey.py","ignoblekeyNookStudy.py","utilities.py","argv_utils.py"]
+                names = ["kindlekey.py","adobekey_windows.py","adobekey_common.py","ignoblekeyNookStudy.py","utilities.py","argv_utils.py"]
 
                 lib_dict = self.load_resources(names)
                 print("{0} v{1}: Copying needed Python scripts from plugin's zip".format(PLUGIN_NAME, PLUGIN_VERSION))
@@ -218,8 +218,8 @@ class DeDRM(FileTypePlugin):
 
     def postProcessEPUB(self, path_to_ebook, path_to_original_ebook = None):
         # This is called after the DRM is removed (or if no DRM was present)
-        # It does stuff like de-obfuscating fonts (by calling checkFonts) 
-        # or removing watermarks. 
+        # It does stuff like de-obfuscating fonts (by calling checkFonts)
+        # or removing watermarks.
 
         postProcessStart = time.time()
         postProcessingNeeded = False
@@ -227,7 +227,7 @@ class DeDRM(FileTypePlugin):
         # Save a backup of the EPUB path after DRM removal but before any postprocessing is done.
         pre_postprocessing_EPUB_path = path_to_ebook
 
-        try: 
+        try:
             import prefs
             dedrmprefs = prefs.DeDRM_Prefs()
 
@@ -247,14 +247,14 @@ class DeDRM(FileTypePlugin):
                 # Remove watermarks (Adobe, Pocketbook or LemonInk) from all HTML and XHTML files
                 path_to_ebook = watermark.removeHTMLwatermarks(self, path_to_ebook) or path_to_ebook
 
-            
-            
+
+
             postProcessEnd = time.time()
             print("{0} v{1}: Post-processing took {2:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION, postProcessEnd-postProcessStart))
 
 
-            # If the EPUB is DRM-free (path_to_original_ebook will only be set in this case), 
-            # and the post-processing hasn't changed anything in the EPUB, 
+            # If the EPUB is DRM-free (path_to_original_ebook will only be set in this case),
+            # and the post-processing hasn't changed anything in the EPUB,
             # return the raw original file from path_to_original_ebook from before the
             # zipfix code was executed.
             if ((path_to_ebook == pre_postprocessing_EPUB_path) and path_to_original_ebook is not None):
@@ -263,15 +263,15 @@ class DeDRM(FileTypePlugin):
 
             return path_to_ebook
 
-        except: 
+        except:
             print("Error while checking settings")
             return path_to_ebook
 
     def checkFonts(self, path_to_ebook):
-        # This is called after the normal DRM removal is done. 
+        # This is called after the normal DRM removal is done.
         # It checks if there's fonts that need to be deobfuscated
 
-        try: 
+        try:
             import epubfontdecrypt
 
             output = self.temporary_file(".epub").name
@@ -284,8 +284,8 @@ class DeDRM(FileTypePlugin):
             else:
                 print("{0} v{1}: Error during font deobfuscation".format(PLUGIN_NAME, PLUGIN_VERSION))
                 raise DeDRMError("Font deobfuscation failed")
- 
-        except: 
+
+        except:
             print("{0} v{1}: Error during font deobfuscation".format(PLUGIN_NAME, PLUGIN_VERSION))
             traceback.print_exc()
             return path_to_ebook
@@ -313,14 +313,14 @@ class DeDRM(FileTypePlugin):
         import lcpdedrm
 
         if (lcpdedrm.isLCPbook(inf.name)):
-            try: 
+            try:
                 retval = lcpdedrm.decryptLCPbook(inf.name, dedrmprefs['lcp_passphrases'], self)
             except:
                 print("Looks like that didn't work:")
                 raise
 
             return self.postProcessEPUB(retval)
-        
+
 
         # Not an LCP book, do the normal EPUB (Adobe) handling.
 
@@ -329,7 +329,7 @@ class DeDRM(FileTypePlugin):
 
         if ineptepub.adeptBook(inf.name):
 
-            if ineptepub.isPassHashBook(inf.name): 
+            if ineptepub.isPassHashBook(inf.name):
                 # This is an Adobe PassHash / B&N encrypted eBook
                 print("{0} v{1}: “{2}” is a secure PassHash-protected (B&N) ePub".format(PLUGIN_NAME, PLUGIN_VERSION, os.path.basename(path_to_ebook)))
 
@@ -378,7 +378,7 @@ class DeDRM(FileTypePlugin):
                 except:
                     print("{0} v{1}: Exception when getting default NOOK Study Key after {2:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION, time.time()-self.starttime))
                     traceback.print_exc()
-                
+
 
                 ###### Add keys from the NOOK Microsoft Store application (ignoblekeyNookStudy.py)
 
@@ -396,12 +396,12 @@ class DeDRM(FileTypePlugin):
 
                 ###### Add keys from Adobe PassHash ADE activation data (adobekey_get_passhash.py)
 
-                try: 
+                try:
                     defaultkeys_ade = []
                     if iswindows:
                         # Right now this is only implemented for Windows. MacOS support still needs to be added.
                         from adobekey_get_passhash import passhash_keys, ADEPTError
-                        try: 
+                        try:
                             defaultkeys_ade, names = passhash_keys()
                         except ADEPTError:
                             defaultkeys_ade = []
@@ -434,7 +434,7 @@ class DeDRM(FileTypePlugin):
                         for i,userkey in enumerate(newkeys):
 
                             if len(userkey) == 0:
-                                print("{0} v{1}: Skipping empty key.".format(PLUGIN_NAME, PLUGIN_VERSION))    
+                                print("{0} v{1}: Skipping empty key.".format(PLUGIN_NAME, PLUGIN_VERSION))
                                 continue
 
                             print("{0} v{1}: Trying a new default key".format(PLUGIN_NAME, PLUGIN_VERSION))
@@ -470,41 +470,41 @@ class DeDRM(FileTypePlugin):
 
                             print("{0} v{1}: Failed to decrypt with new default key after {2:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION,time.time()-self.starttime))
                             return inf.name
-                    
+
                     except:
                         pass
 
                 # Looks like we were unable to decrypt the book ...
                 return inf.name
 
-            else: 
+            else:
                 # This is a "normal" Adobe eBook.
 
                 book_uuid = None
-                try: 
-                    # This tries to figure out which Adobe account UUID the book is licensed for. 
+                try:
+                    # This tries to figure out which Adobe account UUID the book is licensed for.
                     # If we know that we can directly use the correct key instead of having to
                     # try them all.
                     book_uuid = ineptepub.adeptGetUserUUID(inf.name)
-                except: 
+                except:
                     pass
 
-                if book_uuid is None: 
+                if book_uuid is None:
                     print("{0} v{1}: {2} is a secure Adobe Adept ePub".format(PLUGIN_NAME, PLUGIN_VERSION, os.path.basename(path_to_ebook)))
-                else: 
+                else:
                     print("{0} v{1}: {2} is a secure Adobe Adept ePub for UUID {3}".format(PLUGIN_NAME, PLUGIN_VERSION, os.path.basename(path_to_ebook), book_uuid))
 
 
-                if book_uuid is not None: 
-                    # Check if we have a key with that UUID in its name: 
+                if book_uuid is not None:
+                    # Check if we have a key with that UUID in its name:
                     for keyname, userkeyhex in dedrmprefs['adeptkeys'].items():
-                        if not book_uuid.lower() in keyname.lower(): 
+                        if not book_uuid.lower() in keyname.lower():
                             continue
 
                         # Found matching key
                         print("{0} v{1}: Trying UUID-matched encryption key {2:s}".format(PLUGIN_NAME, PLUGIN_VERSION, keyname))
                         of = self.temporary_file(".epub")
-                        try: 
+                        try:
                             userkey = codecs.decode(userkeyhex, 'hex')
                             result = ineptepub.decryptBook(userkey, inf.name, of.name)
                             of.close()
@@ -522,7 +522,7 @@ class DeDRM(FileTypePlugin):
 
                 # Attempt to decrypt epub with each encryption key (generated or provided).
                 for keyname, userkeyhex in dedrmprefs['adeptkeys'].items():
-                    
+
                     print("{0} v{1}: Trying Encryption key {2:s}".format(PLUGIN_NAME, PLUGIN_VERSION, keyname))
                     of = self.temporary_file(".epub")
 
@@ -582,12 +582,12 @@ class DeDRM(FileTypePlugin):
                     idx += 1
 
                 # Check for DeACSM keys:
-                try: 
+                try:
                     from config import checkForDeACSMkeys
 
                     newkey, newname = checkForDeACSMkeys()
 
-                    if newkey is not None: 
+                    if newkey is not None:
                         if codecs.encode(newkey, 'hex').decode('ascii') not in dedrmprefs['adeptkeys'].values():
                             print("{0} v{1}: Found new key '{2}' in DeACSM plugin".format(PLUGIN_NAME, PLUGIN_VERSION, newname))
                             newkeys.append(newkey)
@@ -643,7 +643,7 @@ class DeDRM(FileTypePlugin):
         # Probably a DRM-free EPUB, but we should still check for fonts.
         return self.postProcessEPUB(inf.name, path_to_ebook)
 
-    
+
     def PDFIneptDecrypt(self, path_to_ebook):
         # Sub function to prevent PDFDecrypt from becoming too large ...
         import prefs
@@ -651,31 +651,31 @@ class DeDRM(FileTypePlugin):
         dedrmprefs = prefs.DeDRM_Prefs()
 
         book_uuid = None
-        try: 
+        try:
             # Try to figure out which Adobe account this book is licensed for.
             book_uuid = ineptpdf.adeptGetUserUUID(path_to_ebook)
         except:
             pass
 
-        if book_uuid is not None: 
+        if book_uuid is not None:
             print("{0} v{1}: {2} is a PDF ebook (EBX) for UUID {3}".format(PLUGIN_NAME, PLUGIN_VERSION, os.path.basename(path_to_ebook), book_uuid))
             # Check if we have a key for that UUID
             for keyname, userkeyhex in dedrmprefs['adeptkeys'].items():
                 if not book_uuid.lower() in keyname.lower():
                     continue
-            
+
                 # Found matching key
                 print("{0} v{1}: Trying UUID-matched encryption key {2:s}".format(PLUGIN_NAME, PLUGIN_VERSION, keyname))
                 of = self.temporary_file(".pdf")
 
-                try: 
+                try:
                     userkey = codecs.decode(userkeyhex, 'hex')
                     result = ineptpdf.decryptBook(userkey, path_to_ebook, of.name)
                     of.close()
                     if result == 0:
                         print("{0} v{1}: Decrypted with key {2:s} after {3:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION,keyname,time.time()-self.starttime))
                         return of.name
-                       
+
                 except ineptpdf.ADEPTNewVersionError:
                     print("{0} v{1}: Book uses unsupported (too new) Adobe DRM.".format(PLUGIN_NAME, PLUGIN_VERSION, time.time()-self.starttime))
                     return path_to_ebook
@@ -686,7 +686,7 @@ class DeDRM(FileTypePlugin):
 
         # If we end up here, we didn't find a key with a matching UUID, so lets just try all of them.
 
-        # Attempt to decrypt PDF with each encryption key (generated or provided).        
+        # Attempt to decrypt PDF with each encryption key (generated or provided).
         for keyname, userkeyhex in dedrmprefs['adeptkeys'].items():
             userkey = codecs.decode(userkeyhex,'hex')
             print("{0} v{1}: Trying encryption key {2:s}".format(PLUGIN_NAME, PLUGIN_VERSION, keyname))
@@ -744,12 +744,12 @@ class DeDRM(FileTypePlugin):
             idx += 1
 
         # Check for DeACSM keys:
-        try: 
+        try:
             from config import checkForDeACSMkeys
 
             newkey, newname = checkForDeACSMkeys()
 
-            if newkey is not None: 
+            if newkey is not None:
                 if codecs.encode(newkey, 'hex').decode('ascii') not in dedrmprefs['adeptkeys'].values():
                     print("{0} v{1}: Found new key '{2}' in DeACSM plugin".format(PLUGIN_NAME, PLUGIN_VERSION, newname))
                     newkeys.append(newkey)
@@ -793,7 +793,7 @@ class DeDRM(FileTypePlugin):
 
 
         # Unable to decrypt the PDF with any of the existing keys. Is it a B&N PDF?
-        # Attempt to decrypt PDF with each encryption key (generated or provided).        
+        # Attempt to decrypt PDF with each encryption key (generated or provided).
         for keyname, userkey in dedrmprefs['bandnkeys'].items():
             print("{0} v{1}: Trying Encryption key {2:s}".format(PLUGIN_NAME, PLUGIN_VERSION, keyname))
             of = self.temporary_file(".pdf")
@@ -825,7 +825,7 @@ class DeDRM(FileTypePlugin):
         import ineptpdf
         dedrmprefs = prefs.DeDRM_Prefs()
 
-        # Attempt to decrypt PDF with each encryption key (generated or provided).  
+        # Attempt to decrypt PDF with each encryption key (generated or provided).
         i = -1
         for userpassword in [""] + dedrmprefs['adobe_pdf_passphrases']:
             # Try the empty password, too.
@@ -862,11 +862,11 @@ class DeDRM(FileTypePlugin):
                 # Return the modified PersistentTemporary file to calibre.
                 print("{0} v{1}: Successfully decrypted with password {3} after {2:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION,time.time()-self.starttime, i))
                 return of.name
-        
+
         print("{0} v{1}: Didn't manage to decrypt PDF. Make sure the correct password is entered in the settings.".format(PLUGIN_NAME, PLUGIN_VERSION))
 
-        
-    
+
+
     def PDFDecrypt(self,path_to_ebook):
         import prefs
         import ineptpdf
@@ -874,14 +874,14 @@ class DeDRM(FileTypePlugin):
         dedrmprefs = prefs.DeDRM_Prefs()
 
         if (lcpdedrm.isLCPbook(path_to_ebook)):
-            try: 
+            try:
                 retval = lcpdedrm.decryptLCPbook(path_to_ebook, dedrmprefs['lcp_passphrases'], self)
             except:
                 print("Looks like that didn't work:")
                 raise
 
             return retval
-        
+
         # Not an LCP book, do the normal Adobe handling.
 
         pdf_encryption = ineptpdf.getPDFencryptionType(path_to_ebook)
