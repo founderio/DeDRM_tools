@@ -5,7 +5,7 @@
 # Copyright © 2008-2022 Apprentice Harper et al.
 
 __license__ = 'GPL v3'
-__version__ = '3.1'
+__version__ = '3.2'
 
 # Revision history:
 #  1.0   - Kindle info file decryption, extracted from k4mobidedrm, etc.
@@ -31,6 +31,7 @@ __version__ = '3.1'
 #  2.8   - Fix for Mac OS X Big Sur
 #  3.0   - Python 3 for calibre 5.0
 #  3.1   - Only support PyCryptodome; clean up the code
+#  3.2   - Move Windows-specific code to a separate script to call inside wine, instead of calling the whole script in wine
 
 
 """
@@ -54,26 +55,22 @@ except ImportError:
     from Crypto.Util import Counter
     from Crypto.Protocol.KDF import PBKDF2
 
-try:
-    RegError
-except NameError:
-    class RegError(Exception):
-        pass
 
 # Routines common to Mac and PC
 
-#@@CALIBRE_COMPAT_CODE@@
+# @@CALIBRE_COMPAT_CODE@@
 
-from .utilities import SafeUnbuffered
-from .argv_utils import unicode_argv
-    
+from kindlekey_common import KeyEnvData, KeyMaterial
+from utilities import SafeUnbuffered
+from argv_utils import unicode_argv
+
 
 try:
     from calibre.constants import iswindows, isosx
 except:
     iswindows = sys.platform.startswith('win')
-    isosx = sys.platform.startswith('darwin')
-
+    isosx = sys.platform.startswith("darwin")
+use_wine = not iswindows and not isosx
 
 
 class DrmException(Exception):
@@ -155,21 +152,7 @@ def UnprotectHeaderData(encryptedData):
     return AES.new(key_iv[0:32], AES.MODE_CBC, key_iv[32:48]).decrypt(encryptedData)
 
 # Routines unique to Mac and PC
-if iswindows:
-    from ctypes import windll, c_char_p, c_wchar_p, c_uint, POINTER, byref, \
-        create_unicode_buffer, create_string_buffer, CFUNCTYPE, addressof, \
-        string_at, Structure, c_void_p, cast
-
-    try:
-        import winreg
-    except ImportError:
-        import _winreg as winreg
-
-    MAX_PATH = 255
-    kernel32 = windll.kernel32
-    advapi32 = windll.advapi32
-    crypt32 = windll.crypt32
-
+if iswindows or use_wine:
     # Various character maps used to decrypt kindle info values.
     # Probably supposed to act as obfuscation
     charMap2 = b"AaZzB0bYyCc1XxDdW2wEeVv3FfUuG4g-TtHh5SsIiR6rJjQq7KkPpL8lOoMm9Nn_"
@@ -179,197 +162,99 @@ if iswindows:
     testMap6 = b"9YzAb0Cd1Ef2n5Pr6St7Uvh3Jk4M8WxG"
     testMap8 = b"YvaZ3FfUm9Nn_c1XuG4yCAzB0beVg-TtHh5SsIiR6rJjQdW2wEq7KkPpL8lOoMxD"
 
-    # interface with Windows OS Routines
-    class DataBlob(Structure):
-        _fields_ = [('cbData', c_uint),
-                    ('pbData', c_void_p)]
-    DataBlob_p = POINTER(DataBlob)
+    if use_wine:
+        from kindlekey_common import KeyData
 
+        def CryptUnprotectData(
+            alfdir: str, wineprefix: str, encrypted: bytes, entropy: bytes, flags: int
+        ) -> bytes:
+            scriptpath = os.path.join(alfdir, "kindlekey_windows_cud.py")
 
-    def GetSystemDirectory():
-        GetSystemDirectoryW = kernel32.GetSystemDirectoryW
-        GetSystemDirectoryW.argtypes = [c_wchar_p, c_uint]
-        GetSystemDirectoryW.restype = c_uint
-        def GetSystemDirectory():
-            buffer = create_unicode_buffer(MAX_PATH + 1)
-            GetSystemDirectoryW(buffer, len(buffer))
-            return buffer.value
-        return GetSystemDirectory
-    GetSystemDirectory = GetSystemDirectory()
+            from wineutils import WinePythonCLI, NoWinePython3Exception
+            import pickle
 
-    def GetVolumeSerialNumber():
-        GetVolumeInformationW = kernel32.GetVolumeInformationW
-        GetVolumeInformationW.argtypes = [c_wchar_p, c_wchar_p, c_uint,
-                                          POINTER(c_uint), POINTER(c_uint),
-                                          POINTER(c_uint), c_wchar_p, c_uint]
-        GetVolumeInformationW.restype = c_uint
-        def GetVolumeSerialNumber(path = GetSystemDirectory().split('\\')[0] + '\\'):
-            vsn = c_uint(0)
-            GetVolumeInformationW(path, None, 0, byref(vsn), None, None, None, 0)
-            return str(vsn.value)
-        return GetVolumeSerialNumber
-    GetVolumeSerialNumber = GetVolumeSerialNumber()
-
-    def GetIDString():
-        vsn = GetVolumeSerialNumber()
-        #print('Using Volume Serial Number for ID: '+vsn)
-        return vsn
-
-    def getLastError():
-        GetLastError = kernel32.GetLastError
-        GetLastError.argtypes = None
-        GetLastError.restype = c_uint
-        def getLastError():
-            return GetLastError()
-        return getLastError
-    getLastError = getLastError()
-
-    def GetUserName():
-        GetUserNameW = advapi32.GetUserNameW
-        GetUserNameW.argtypes = [c_wchar_p, POINTER(c_uint)]
-        GetUserNameW.restype = c_uint
-        def GetUserName():
-            buffer = create_unicode_buffer(2)
-            size = c_uint(len(buffer))
-            while not GetUserNameW(buffer, byref(size)):
-                errcd = getLastError()
-                if errcd == 234:
-                    # bad wine implementation up through wine 1.3.21
-                    return "AlternateUserName"
-                # double the buffer size
-                buffer = create_unicode_buffer(len(buffer) * 2)
-                size.value = len(buffer)
-
-            # replace any non-ASCII values with 0xfffd
-            for i in range(0,len(buffer)):
-                if sys.version_info[0] == 2:
-                    if buffer[i]>u"\u007f":
-                        #print "swapping char "+str(i)+" ("+buffer[i]+")"
-                        buffer[i] = u"\ufffd"
-                else: 
-                    if buffer[i]>"\u007f":
-                        #print "swapping char "+str(i)+" ("+buffer[i]+")"
-                        buffer[i] = "\ufffd"
-            # return utf-8 encoding of modified username
-            #print "modified username:"+buffer.value
-            return buffer.value.encode('utf-8')
-        return GetUserName
-    GetUserName = GetUserName()
-
-    def CryptUnprotectData():
-        _CryptUnprotectData = crypt32.CryptUnprotectData
-        _CryptUnprotectData.argtypes = [DataBlob_p, c_wchar_p, DataBlob_p,
-                                       c_void_p, c_void_p, c_uint, DataBlob_p]
-        _CryptUnprotectData.restype = c_uint
-        def CryptUnprotectData(indata, entropy, flags):
-            indatab = create_string_buffer(indata)
-            indata = DataBlob(len(indata), cast(indatab, c_void_p))
-            entropyb = create_string_buffer(entropy)
-            entropy = DataBlob(len(entropy), cast(entropyb, c_void_p))
-            outdata = DataBlob()
-            if not _CryptUnprotectData(byref(indata), None, byref(entropy),
-                                       None, None, flags, byref(outdata)):
-                # raise DrmException("Failed to Unprotect Data")
-                return b'failed'
-            return string_at(outdata.pbData, outdata.cbData)
-        return CryptUnprotectData
-    CryptUnprotectData = CryptUnprotectData()
-
-    # Returns Environmental Variables that contain unicode
-    # name must be unicode string, not byte string.
-    def getEnvironmentVariable(name):
-        import ctypes
-        n = ctypes.windll.kernel32.GetEnvironmentVariableW(name, None, 0)
-        if n == 0:
-            return None
-        buf = ctypes.create_unicode_buffer("\0"*n)
-        ctypes.windll.kernel32.GetEnvironmentVariableW(name, buf, n)
-        return buf.value
-
-    # Locate all of the kindle-info style files and return as list
-    def getKindleInfoFiles():
-        kInfoFiles = []
-        # some 64 bit machines do not have the proper registry key for some reason
-        # or the python interface to the 32 vs 64 bit registry is broken
-        path = ""
-        if 'LOCALAPPDATA' in os.environ.keys():
-            # Python 2.x does not return unicode env. Use Python 3.x
-            if sys.version_info[0] == 2:
-                path = winreg.ExpandEnvironmentStrings(u"%LOCALAPPDATA%")
-            else:
-                path = winreg.ExpandEnvironmentStrings("%LOCALAPPDATA%")
-            # this is just another alternative.
-            # path = getEnvironmentVariable('LOCALAPPDATA')
-            if not os.path.isdir(path):
-                path = ""
-        else:
-            # User Shell Folders show take precedent over Shell Folders if present
             try:
-                # this will still break
-                regkey = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders\\")
-                path = winreg.QueryValueEx(regkey, 'Local AppData')[0]
-                if not os.path.isdir(path):
-                    path = ""
-                    try:
-                        regkey = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders\\")
-                        path = winreg.QueryValueEx(regkey, 'Local AppData')[0]
-                        if not os.path.isdir(path):
-                            path = ""
-                    except RegError:
-                        pass
-            except RegError:
-                pass
+                pyexec = WinePythonCLI(wineprefix)
+            except NoWinePython3Exception:
+                raise DrmException("unable to unprotect string")
 
-        found = False
-        if path == "":
-            print ('Could not find the folder in which to look for kinfoFiles.')
-        else:
-            # Probably not the best. To Fix (shouldn't ignore in encoding) or use utf-8
-            print("searching for kinfoFiles in " + path)
+            basepath = os.path.dirname(scriptpath)
 
-            # look for (K4PC 1.25.1 and later) .kinf2018 file
-            kinfopath = path +'\\Amazon\\Kindle\\storage\\.kinf2018'
-            if os.path.isfile(kinfopath):
-                found = True
-                print('Found K4PC 1.25+ kinf2018 file: ' + kinfopath)
-                kInfoFiles.append(kinfopath)
+            outdirpath = os.path.join(basepath, "winekeysdir")
+            outpath = os.path.join(outdirpath, "keydata.pickle")
+            if not os.path.exists(outdirpath):
+                os.makedirs(outdirpath)
+            try:
+                keymaterial = KeyData()
+                keymaterial.encrypted = encrypted
+                keymaterial.entropy = entropy
+                keymaterial.flags = flags
+                with open(outpath, "wb") as datafile:
+                    pickle.dump(keymaterial, datafile)
 
-            # look for (K4PC 1.9.0 and later) .kinf2011 file
-            kinfopath = path +'\\Amazon\\Kindle\\storage\\.kinf2011'
-            if os.path.isfile(kinfopath):
-                found = True
-                print('Found K4PC 1.9+ kinf2011 file: ' + kinfopath)
-                kInfoFiles.append(kinfopath)
+                if not pyexec.run_script(scriptpath, [outpath]):
+                    raise DrmException("unable to unprotect string")
 
-            # look for (K4PC 1.6.0 and later) rainier.2.1.1.kinf file
-            kinfopath = path +'\\Amazon\\Kindle\\storage\\rainier.2.1.1.kinf'
-            if os.path.isfile(kinfopath):
-                found = True
-                print('Found K4PC 1.6-1.8 kinf file: ' + kinfopath)
-                kInfoFiles.append(kinfopath)
+                with open(outpath, "rb") as datafile:
+                    keymaterial: KeyData = pickle.load(datafile)
+            finally:
+                # Make sure to always remove the keymaterial from disk
+                os.remove(outpath)
 
-            # look for (K4PC 1.5.0 and later) rainier.2.1.1.kinf file
-            kinfopath = path +'\\Amazon\\Kindle For PC\\storage\\rainier.2.1.1.kinf'
-            if os.path.isfile(kinfopath):
-                found = True
-                print('Found K4PC 1.5 kinf file: ' + kinfopath)
-                kInfoFiles.append(kinfopath)
+            return keymaterial.plaintext
 
-           # look for original (earlier than K4PC 1.5.0) kindle-info files
-            kinfopath = path +'\\Amazon\\Kindle For PC\\{AMAwzsaPaaZAzmZzZQzgZCAkZ3AjA_AY}\\kindle.info'
-            if os.path.isfile(kinfopath):
-                found = True
-                print('Found K4PC kindle.info file: ' + kinfopath)
-                kInfoFiles.append(kinfopath)
+        def getKindleInfoFiles(alfdir: str, wineprefix: str) -> KeyMaterial:
+            scriptpath = os.path.join(alfdir, "kindlekey_windows.py")
 
-        if not found:
-            print('No K4PC kindle.info/kinf/kinf2011 files have been found.')
-        return kInfoFiles
+            from wineutils import WinePythonCLI, NoWinePython3Exception
+            import pickle
 
+            try:
+                pyexec = WinePythonCLI(wineprefix)
+            except NoWinePython3Exception:
+                return KeyMaterial()
+
+            basepath = os.path.dirname(scriptpath)
+
+            outdirpath = os.path.join(basepath, "winekeysdir")
+            outpath = os.path.join(outdirpath, "keymaterial.pickle")
+            if not os.path.exists(outdirpath):
+                os.makedirs(outdirpath)
+
+            try:
+                if not pyexec.run_script(scriptpath, [outpath]):
+                    return KeyMaterial()
+
+                with open(outpath, "rb") as keymaterialfile:
+                    keymaterial: KeyMaterial = pickle.load(keymaterialfile)
+            finally:
+                # Make sure to always remove the keymaterial from disk
+                os.remove(outpath)
+
+            # Convert from Wine paths (C:\\... to unix paths so we can read the files from outside Wine)
+            for i,file in enumerate(keymaterial.filenames):
+                keymaterial.filenames[i] = pyexec.resolve_wine_path(file)
+
+            return keymaterial
+
+    else:
+        from kindlekey_windows_cud import CryptUnprotectData as _CryptUnprotectData
+        from kindlekey_windows import getKindleInfoFiles as _getKindleInfoFiles
+
+        def CryptUnprotectData(
+            alfdir: str, wineprefix: str, encrypted: bytes, entropy: bytes, flags: int
+        ) -> bytes:
+            """alfdir and wineprefix only used on wine."""
+            return _CryptUnprotectData(encrypted, entropy, flags)
+
+        def getKindleInfoFiles(alfdir: str, wineprefix: str) -> KeyMaterial:
+            """alfdir and wineprefix only used on wine."""
+            return _getKindleInfoFiles()
 
     # determine type of kindle info provided and return a
     # database of keynames and values
-    def getDBfromFile(kInfoFile):
+    def getDBfromFile(alfdir: str, wineprefix: str, env: KeyEnvData, kInfoFile: str):
+        """alfdir and wineprefix only used on wine."""
         names = [\
             b'kindle.account.tokens',\
             b'kindle.cookie.item',\
@@ -409,7 +294,7 @@ if iswindows:
         headerblob = items.pop(0)
         encryptedValue = decode(headerblob, testMap1)
         cleartext = UnprotectHeaderData(encryptedValue)
-        #print "header  cleartext:",cleartext
+        # print "header  cleartext:",cleartext
         # now extract the pieces that form the added entropy
         pattern = re.compile(br'''\[Version:(\d+)\]\[Build:(\d+)\]\[Cksum:([^\]]+)\]\[Guid:([\{\}a-z0-9\-]+)\]''', re.IGNORECASE)
         for m in re.finditer(pattern, cleartext):
@@ -421,7 +306,7 @@ if iswindows:
             added_entropy = build + guid
         elif version == 6:  # .kinf2018
             salt = str(0x6d8 * int(build)).encode('utf-8') + guid
-            sp = GetUserName() + b'+@#$%+' + GetIDString().encode('utf-8')
+            sp = env.username + b'+@#$%+' + env.idstrings[0].encode('utf-8')
             passwd = encode(SHA256(sp), charMap5)
             key = PBKDF2(passwd, salt, count=10000, dkLen=0x400)[:32]  # this is very slow
 
@@ -452,10 +337,10 @@ if iswindows:
             # key names now use the new testMap8 encoding
             if keyhash in namehashmap:
                 keyname=namehashmap[keyhash]
-                #print "keyname found from hash:",keyname
+                # print "keyname found from hash:",keyname
             else:
                 keyname = keyhash
-                #print "keyname not found, hash is:",keyname
+                # print "keyname not found, hash is:",keyname
 
             # the testMap8 encoded contents data has had a length
             # of chars (always odd) cut off of the front and moved
@@ -471,20 +356,20 @@ if iswindows:
             # by moving noffset chars from the start of the
             # string to the end of the string
             encdata = b"".join(edlst)
-            #print "encrypted data:",encdata
+            # print "encrypted data:",encdata
             contlen = len(encdata)
             noffset = contlen - primes(int(contlen/3))[-1]
             pfx = encdata[0:noffset]
             encdata = encdata[noffset:]
             encdata = encdata + pfx
-            #print "rearranged data:",encdata
+            # print "rearranged data:",encdata
 
             if version == 5:
                 # decode using new testMap8 to get the original CryptProtect Data
                 encryptedValue = decode(encdata,testMap8)
-                #print "decoded data:",encryptedValue.encode('hex')
+                # print "decoded data:",encryptedValue.encode('hex')
                 entropy = SHA1(keyhash) + added_entropy
-                cleartext = CryptUnprotectData(encryptedValue, entropy, 1)
+                cleartext = CryptUnprotectData(alfdir, wineprefix, encryptedValue, entropy, 1)
             elif version == 6:
                 # decode using new testMap8 to get IV + ciphertext
                 iv_ciphertext = decode(encdata, testMap8)
@@ -501,15 +386,15 @@ if iswindows:
                 cleartext = decode(cipher.decrypt(ciphertext), charMap5)
 
             if len(cleartext)>0:
-                #print "cleartext data:",cleartext,":end data"
+                # print "cleartext data:",cleartext,":end data"
                 DB[keyname] = cleartext
-            #print keyname, cleartext
+            # print keyname, cleartext
 
         if len(DB)>6:
             # store values used in decryption
-            DB[b'IDString'] = GetIDString().encode('utf-8')
-            DB[b'UserName'] = GetUserName()
-            print("Decrypted key file using IDString '{0:s}' and UserName '{1:s}'".format(GetIDString(), GetUserName().decode('utf-8')))
+            DB[b'IDString'] = env.idstrings[0].encode('utf-8')
+            DB[b'UserName'] = env.username
+            print("Decrypted key file using IDString '{0:s}' and UserName '{1:s}'".format(env.idstrings[0], env.username.decode('utf-8')))
         else:
             print("Couldn't decrypt file.")
             DB = {}
@@ -540,7 +425,7 @@ elif isosx:
         cmdline = cmdline.encode(sys.getfilesystemencoding())
         p = subprocess.Popen(cmdline, shell=True, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=False)
         out1, out2 = p.communicate()
-        #print out1
+        # print out1
         reslst = out1.split(b'\n')
         cnt = len(reslst)
         for j in range(cnt):
@@ -577,7 +462,7 @@ elif isosx:
         cmdline = cmdline.encode(sys.getfilesystemencoding())
         p = subprocess.Popen(cmdline, shell=True, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=False)
         out1, out2 = p.communicate()
-        #print out1
+        # print out1
         reslst = out1.split(b'\n')
         cnt = len(reslst)
         for j in range(cnt):
@@ -604,14 +489,14 @@ elif isosx:
             resline = reslst[j]
             pp = resline.find(b'Ethernet Address: ')
             if pp >= 0:
-                #print resline
+                # print resline
                 macnum = resline[pp+18:]
                 macnum = macnum.strip()
                 maclst = macnum.split(b':')
                 n = len(maclst)
                 if n != 6:
                     continue
-                #print 'original mac', macnum
+                # print 'original mac', macnum
                 # now munge it up the way Kindle app does
                 # by xoring it with 0xa5 and swapping elements 3 and 4
                 for i in range(6):
@@ -624,15 +509,14 @@ elif isosx:
                 mlst[1] = maclst[1] ^ 0xa5
                 mlst[0] = maclst[0] ^ 0xa5
                 macnum = b'%0.2x%0.2x%0.2x%0.2x%0.2x%0.2x' % (mlst[0], mlst[1], mlst[2], mlst[3], mlst[4], mlst[5])
-                #print 'munged mac', macnum
+                # print 'munged mac', macnum
                 macnums.append(macnum)
         return macnums
-
 
     # uses unix env to get username instead of using sysctlbyname
     def GetUserName():
         username = os.getenv('USER')
-        #print "Username:",username
+        # print "Username:",username
         return username.encode('utf-8')
 
     def GetIDStrings():
@@ -643,7 +527,7 @@ elif isosx:
         strings.extend(GetDiskPartitionNames())
         strings.extend(GetDiskPartitionUUIDs())
         strings.append(b'9999999999')
-        #print "ID Strings:\n",strings
+        # print "ID Strings:\n",strings
         return strings
 
     # implements an Pseudo Mac Version of Windows built-in Crypto routine
@@ -662,68 +546,74 @@ elif isosx:
             cleartext = decode(cleartext, charMap2)
             return cleartext
 
-
     # Locate the .kindle-info files
-    def getKindleInfoFiles():
-        # file searches can take a long time on some systems, so just look in known specific places.
-        kInfoFiles=[]
+    def getKindleInfoFiles(alfdir: str, wineprefix: str) -> KeyMaterial:
+        """alfdir and wineprefix only used on wine."""
+
+        keymaterial = KeyMaterial()
+        keymaterial.env.idstrings = GetIDStrings()
+        keymaterial.env.username = GetUserName()
+
         found = False
         home = os.getenv('HOME')
         # check for  .kinf2018 file in new location (App Store Kindle for Mac)
         testpath = home + '/Library/Containers/com.amazon.Kindle/Data/Library/Application Support/Kindle/storage/.kinf2018'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac kinf2018 file: ' + testpath)
             found = True
         # check for  .kinf2018 files
         testpath = home + '/Library/Application Support/Kindle/storage/.kinf2018'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac kinf2018 file: ' + testpath)
             found = True
         # check for  .kinf2011 file in new location (App Store Kindle for Mac)
         testpath = home + '/Library/Containers/com.amazon.Kindle/Data/Library/Application Support/Kindle/storage/.kinf2011'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac kinf2011 file: ' + testpath)
             found = True
         # check for  .kinf2011 files from 1.10
         testpath = home + '/Library/Application Support/Kindle/storage/.kinf2011'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac kinf2011 file: ' + testpath)
             found = True
         # check for  .rainier-2.1.1-kinf files from 1.6
         testpath = home + '/Library/Application Support/Kindle/storage/.rainier-2.1.1-kinf'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac rainier file: ' + testpath)
             found = True
         # check for  .kindle-info files from 1.4
         testpath = home + '/Library/Application Support/Kindle/storage/.kindle-info'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac kindle-info file: ' + testpath)
             found = True
         # check for  .kindle-info file from 1.2.2
         testpath = home + '/Library/Application Support/Amazon/Kindle/storage/.kindle-info'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac kindle-info file: ' + testpath)
             found = True
         # check for  .kindle-info file from 1.0 beta 1 (27214)
         testpath = home + '/Library/Application Support/Amazon/Kindle for Mac/storage/.kindle-info'
         if os.path.isfile(testpath):
-            kInfoFiles.append(testpath)
+            keymaterial.filenames.append(testpath)
             print('Found k4Mac kindle-info file: ' + testpath)
             found = True
+
         if not found:
             print('No k4Mac kindle-info/rainier/kinf2011 files have been found.')
-        return kInfoFiles
+
+        return keymaterial
 
     # determine type of kindle info provided and return a
     # database of keynames and values
-    def getDBfromFile(kInfoFile):
+    def getDBfromFile(alfdir: str, wineprefix: str,  env: KeyEnvData, kInfoFile: str):
+        """alfdir and wineprefix only used on wine."""
         names = [\
             b'kindle.account.tokens',\
             b'kindle.cookie.item',\
@@ -753,9 +643,8 @@ elif isosx:
 
         data = filedata[:-1]
         items = data.split(b'/')
-        IDStrings = GetIDStrings()
-        print ("trying username ", GetUserName(), " on file ", kInfoFile)
-        for IDString in IDStrings:
+        print ("trying username ", env.username, " on file ", kInfoFile)
+        for IDString in env.idstrings:
             print ("trying IDString:",IDString)
             try:
                 DB = {}
@@ -763,11 +652,11 @@ elif isosx:
 
                 # the headerblob is the encrypted information needed to build the entropy string
                 headerblob = items.pop(0)
-                #print ("headerblob: ",headerblob)
+                # print ("headerblob: ",headerblob)
                 encryptedValue = decode(headerblob, charMap1)
-                #print ("encryptedvalue: ",encryptedValue)
+                # print ("encryptedvalue: ",encryptedValue)
                 cleartext = UnprotectHeaderData(encryptedValue)
-                #print ("cleartext: ",cleartext)
+                # print ("cleartext: ",cleartext)
 
                 # now extract the pieces in the same way
                 pattern = re.compile(br'''\[Version:(\d+)\]\[Build:(\d+)\]\[Cksum:([^\]]+)\]\[Guid:([\{\}a-z0-9\-]+)\]''', re.IGNORECASE)
@@ -776,28 +665,28 @@ elif isosx:
                     build = m.group(2)
                     guid = m.group(4)
 
-                #print ("version",version)
-                #print ("build",build)
-                #print ("guid",guid,"\n")
+                # print ("version",version)
+                # print ("build",build)
+                # print ("guid",guid,"\n")
 
                 if version == 5:  # .kinf2011: identical to K4PC, except the build number gets multiplied
                     entropy = str(0x2df * int(build)).encode('utf-8') + guid
                     cud = CryptUnprotectData(entropy,IDString)
-                    #print ("entropy",entropy)
-                    #print ("cud",cud)
+                    # print ("entropy",entropy)
+                    # print ("cud",cud)
 
                 elif version == 6:  # .kinf2018: identical to K4PC
                     salt = str(0x6d8 * int(build)).encode('utf-8') + guid
-                    sp = GetUserName() + b'+@#$%+' + IDString
+                    sp = env.username + b'+@#$%+' + IDString
                     passwd = encode(SHA256(sp), charMap5)
                     key = PBKDF2(passwd, salt, count=10000, dkLen=0x400)[:32]
 
-                    #print ("salt",salt)
-                    #print ("sp",sp)
-                    #print ("passwd",passwd)
-                    #print ("key",key)
+                    # print ("salt",salt)
+                    # print ("sp",sp)
+                    # print ("passwd",passwd)
+                    # print ("key",key)
 
-               # loop through the item records until all are processed
+                # loop through the item records until all are processed
                 while len(items) > 0:
 
                     # get the first item record
@@ -896,17 +785,20 @@ elif isosx:
             print("Couldn't decrypt file.")
             DB = {}
         return DB
+
+
 else:
     def getDBfromFile(kInfoFile):
         raise DrmException("This script only runs under Windows or Mac OS X.")
         return {}
 
-def kindlekeys(files = []):
+def kindlekeys(files = [], alfdir = ".", wineprefix = ""):
     keys = []
-    if files == []:
-        files = getKindleInfoFiles()
+    keymaterial = getKindleInfoFiles(alfdir, wineprefix)
+    if len(files) == 0:
+        files = keymaterial.filenames
     for file in files:
-        key = getDBfromFile(file)
+        key = getDBfromFile(alfdir, wineprefix, keymaterial.env, file)
         if key:
             # convert all values to hex, just in case.
             n_key = {}

@@ -6,7 +6,7 @@ __license__ = 'GPL v3'
 # Standard Python modules.
 import os, sys, re, hashlib, traceback
 
-#@@CALIBRE_COMPAT_CODE@@
+# @@CALIBRE_COMPAT_CODE@@
 
 from __init__ import PLUGIN_NAME, PLUGIN_VERSION
 
@@ -14,6 +14,8 @@ from __init__ import PLUGIN_NAME, PLUGIN_VERSION
 class NoWinePython3Exception(Exception):
     pass
 
+class NameNotTranslatedException(Exception):
+    pass
 
 class WinePythonCLI:
     py3_test = "import sys; sys.exit(0 if (sys.version_info.major==3) else 1)"
@@ -51,8 +53,9 @@ class WinePythonCLI:
                     print("{0} v{1}: {2} does not exist".format(
                         PLUGIN_NAME, PLUGIN_VERSION, " ".join(self.python_exec)
                     ))
-        raise NoWinePython3Exception("Could not find python3 executable on specified wine prefix")
+        print('{0} v{1}: Unable to find python3 executable in WINEPREFIX="{2}"'.format(PLUGIN_NAME, PLUGIN_VERSION, wineprefix))
 
+        raise NoWinePython3Exception("Could not find python3 executable on specified wine prefix")
 
     def check_call(self, cli_args):
         import subprocess
@@ -66,6 +69,49 @@ class WinePythonCLI:
                               stdin=None, stdout=sys.stdout,
                               stderr=subprocess.STDOUT, close_fds=False,
                               bufsize=1)
+
+    def run_script(self, scriptpath: str, args: list[str]) -> bool:
+        from __init__ import PLUGIN_NAME, PLUGIN_VERSION
+
+        script = os.path.basename(scriptpath)
+        print(
+            "{0} v{1}: Running {2} under Wine".format(
+                PLUGIN_NAME, PLUGIN_VERSION, script
+            )
+        )
+
+        try:
+            self.check_call([scriptpath] + args)
+            return True
+        except Exception as e:
+            print(
+                "{0} v{1}: Wine subprocess call error: {2}".format(
+                    PLUGIN_NAME, PLUGIN_VERSION, e.args[0]
+                )
+            )
+            return False
+
+    def resolve_wine_path(self, wine_file_path: str) -> str:
+        """Resolves a wine path into a unix path, e.g. from C:\\WINDOWS to $WINEPREFIX/drive_c/WINDOWS"""
+        import subprocess
+
+        env_dict = os.environ
+        env_dict["PYTHONPATH"] = ""
+        if self.wineprefix is not None:
+            env_dict["WINEPREFIX"] = self.wineprefix
+
+        unix_file_path = subprocess.check_output(
+            ["winepath", wine_file_path],
+            env=env_dict,
+            stdin=None,
+            stderr=subprocess.STDOUT,
+            close_fds=False,
+            bufsize=1,
+        )
+
+        if unix_file_path == "":
+            raise NameNotTranslatedException("Could not translate path from Wine to Unix, see output")
+        return unix_file_path.strip()
 
 
 def WineGetKeys(scriptpath, extension, wineprefix=""):

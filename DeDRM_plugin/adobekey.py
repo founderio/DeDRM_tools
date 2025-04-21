@@ -81,22 +81,15 @@ if iswindows or use_wine:
         def obtain_key_material(alfdir: str, wineprefix: str) -> KeyMaterial:
             scriptpath = os.path.join(alfdir, "adobekey_windows.py")
 
-            from __init__ import PLUGIN_NAME, PLUGIN_VERSION
             from wineutils import WinePythonCLI, NoWinePython3Exception
             import pickle
 
             try:
                 pyexec = WinePythonCLI(wineprefix)
             except NoWinePython3Exception:
-                print('{0} v{1}: Unable to find python3 executable in WINEPREFIX="{2}"'.format(PLUGIN_NAME, PLUGIN_VERSION, wineprefix))
                 return KeyMaterial()
 
-            basepath, script = os.path.split(scriptpath)
-            print(
-                "{0} v{1}: Running {2} under Wine".format(
-                    PLUGIN_NAME, PLUGIN_VERSION, scriptpath
-                )
-            )
+            basepath = os.path.dirname(scriptpath)
 
             outdirpath = os.path.join(basepath, "winekeysdir")
             outpath = os.path.join(outdirpath, "keymaterial.pickle")
@@ -104,11 +97,9 @@ if iswindows or use_wine:
                 os.makedirs(outdirpath)
 
             try:
-                pyexec.check_call([scriptpath, outpath])
-            except Exception as e:
-                print("{0} v{1}: Wine subprocess call error: {2}".format(PLUGIN_NAME, PLUGIN_VERSION, e.args[0]))
+                if not pyexec.run_script(scriptpath, [outpath]):
+                    return KeyMaterial()
 
-            try:
                 with open(outpath, "rb") as keymaterialfile:
                     keymaterial: KeyMaterial = pickle.load(keymaterialfile)
             finally:
@@ -175,7 +166,9 @@ elif isosx:
             return ActDatPath
         return None
 
-    def adeptkeys():
+    def adeptkeys(alfdir: str, wineprefix: str):
+        """alfdir and wineprefix are only used when using Wine."""
+
         # TODO: All the code to support extracting multiple activation keys
         # TODO: seems to be Windows-only currently, still needs to be added for Mac.
         actpath = findActivationDat()
@@ -209,10 +202,14 @@ elif isosx:
         userkey = userkey[26:]
         return [userkey], [keyName]
 
+
 else:
-    def adeptkeys():
+
+    def adeptkeys(alfdir: str, wineprefix: str):
+        """alfdir and wineprefix are only used when using Wine."""
         raise ADEPTError("This script only supports Windows (or Wine) and Mac OS X.")
         return [], []
+
 
 # interface for Python DeDRM
 def getkey(outpath):
@@ -281,10 +278,7 @@ def cli_main():
     # make sure the outpath is the
     outpath = os.path.realpath(os.path.normpath(outpath))
 
-    if use_wine:
-        keys, names = adeptkeys(".", "")
-    else:
-        keys, names = adeptkeys()
+    keys, names = adeptkeys(".", "")
     if len(keys) > 0:
         if not os.path.isdir(outpath):
             outfile = outpath

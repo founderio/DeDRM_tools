@@ -93,7 +93,7 @@ import sys, os
 import time
 import traceback
 
-#@@CALIBRE_COMPAT_CODE@@
+# @@CALIBRE_COMPAT_CODE@@
 
 try:
     try:
@@ -153,13 +153,12 @@ class DeDRM(FileTypePlugin):
     supported_platforms     = ['linux', 'osx', 'windows']
     author                  = "Apprentice Alf, Apprentice Harper, NoDRM, The Dark Reverser and i♥cabbages"
     version                 = PLUGIN_VERSION_TUPLE
-    #minimum_calibre_version = (5, 0, 0)  # Python 3.
+    # minimum_calibre_version = (5, 0, 0)  # Python 3.
     minimum_calibre_version = (2, 0, 0)  # Needs Calibre 1.0 minimum. 1.X untested.
     file_types              = set(['epub','pdf','pdb','prc','mobi','pobi','azw','azw1','azw3','azw4','azw8','tpz','kfx','kfx-zip'])
     on_import               = True
     on_preprocess           = True
     priority                = 600
-
 
     def cli_main(self, data):
         from .standalone import main
@@ -191,7 +190,16 @@ class DeDRM(FileTypePlugin):
             self.verdir = os.path.join(self.maindir,PLUGIN_VERSION)
             if not os.path.exists(self.verdir) and not iswindows and not isosx:
 
-                names = ["kindlekey.py","adobekey_windows.py","adobekey_common.py","ignoblekeyNookStudy.py","utilities.py","argv_utils.py"]
+                names = [
+                    "kindlekey_windows.py",
+                    "kindlekey_windows_cud.py",
+                    "kindlekey_common.py",
+                    "adobekey_windows.py",
+                    "adobekey_common.py",
+                    "ignoblekeyNookStudy.py",
+                    "utilities.py",
+                    "argv_utils.py",
+                ]
 
                 lib_dict = self.load_resources(names)
                 print("{0} v{1}: Copying needed Python scripts from plugin's zip".format(PLUGIN_NAME, PLUGIN_VERSION))
@@ -247,11 +255,8 @@ class DeDRM(FileTypePlugin):
                 # Remove watermarks (Adobe, Pocketbook or LemonInk) from all HTML and XHTML files
                 path_to_ebook = watermark.removeHTMLwatermarks(self, path_to_ebook) or path_to_ebook
 
-
-
             postProcessEnd = time.time()
             print("{0} v{1}: Post-processing took {2:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION, postProcessEnd-postProcessStart))
-
 
             # If the EPUB is DRM-free (path_to_original_ebook will only be set in this case),
             # and the post-processing hasn't changed anything in the EPUB,
@@ -308,7 +313,6 @@ class DeDRM(FileTypePlugin):
         import prefs
         dedrmprefs = prefs.DeDRM_Prefs()
 
-
         # import the LCP handler
         import lcpdedrm
 
@@ -320,7 +324,6 @@ class DeDRM(FileTypePlugin):
                 raise
 
             return self.postProcessEPUB(retval)
-
 
         # Not an LCP book, do the normal EPUB (Adobe) handling.
 
@@ -379,7 +382,6 @@ class DeDRM(FileTypePlugin):
                     print("{0} v{1}: Exception when getting default NOOK Study Key after {2:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION, time.time()-self.starttime))
                     traceback.print_exc()
 
-
                 ###### Add keys from the NOOK Microsoft Store application (ignoblekeyNookStudy.py)
 
                 try:
@@ -411,7 +413,6 @@ class DeDRM(FileTypePlugin):
                 except:
                     print("{0} v{1}: Exception when getting PassHashes from ADE after {2:.1f} seconds".format(PLUGIN_NAME, PLUGIN_VERSION, time.time()-self.starttime))
                     traceback.print_exc()
-
 
                 ###### Check if one of the new keys decrypts the book:
 
@@ -494,7 +495,6 @@ class DeDRM(FileTypePlugin):
                 else:
                     print("{0} v{1}: {2} is a secure Adobe Adept ePub for UUID {3}".format(PLUGIN_NAME, PLUGIN_VERSION, os.path.basename(path_to_ebook), book_uuid))
 
-
                 if book_uuid is not None:
                     # Check if we have a key with that UUID in its name:
                     for keyname, userkeyhex in dedrmprefs['adeptkeys'].items():
@@ -518,7 +518,6 @@ class DeDRM(FileTypePlugin):
                         except:
                             print("{0} v{1}: Exception when decrypting after {2:.1f} seconds - trying other keys".format(PLUGIN_NAME, PLUGIN_VERSION, time.time()-self.starttime))
                             traceback.print_exc()
-
 
                 # Attempt to decrypt epub with each encryption key (generated or provided).
                 for keyname, userkeyhex in dedrmprefs['adeptkeys'].items():
@@ -637,12 +636,9 @@ class DeDRM(FileTypePlugin):
                 print("{0} v{1}: Ultimately failed to decrypt after {2:.1f} seconds. Read the FAQs at noDRM's repository: https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md".format(PLUGIN_NAME, PLUGIN_VERSION,time.time()-self.starttime))
                 raise DeDRMError("{0} v{1}: Ultimately failed to decrypt after {2:.1f} seconds. Read the FAQs at noDRM's repository: https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md".format(PLUGIN_NAME, PLUGIN_VERSION,time.time()-self.starttime))
 
-
-
         # Not a Barnes & Noble nor an Adobe Adept
         # Probably a DRM-free EPUB, but we should still check for fonts.
         return self.postProcessEPUB(inf.name, path_to_ebook)
-
 
     def PDFIneptDecrypt(self, path_to_ebook):
         # Sub function to prevent PDFDecrypt from becoming too large ...
@@ -682,7 +678,6 @@ class DeDRM(FileTypePlugin):
                 except:
                     print("{0} v{1}: Exception when decrypting after {2:.1f} seconds - trying other keys".format(PLUGIN_NAME, PLUGIN_VERSION, time.time()-self.starttime))
                     traceback.print_exc()
-
 
         # If we end up here, we didn't find a key with a matching UUID, so lets just try all of them.
 
@@ -791,7 +786,6 @@ class DeDRM(FileTypePlugin):
             except Exception as e:
                 traceback.print_exc()
 
-
         # Unable to decrypt the PDF with any of the existing keys. Is it a B&N PDF?
         # Attempt to decrypt PDF with each encryption key (generated or provided).
         for keyname, userkey in dedrmprefs['bandnkeys'].items():
@@ -865,8 +859,6 @@ class DeDRM(FileTypePlugin):
 
         print("{0} v{1}: Didn't manage to decrypt PDF. Make sure the correct password is entered in the settings.".format(PLUGIN_NAME, PLUGIN_VERSION))
 
-
-
     def PDFDecrypt(self,path_to_ebook):
         import prefs
         import ineptpdf
@@ -904,7 +896,6 @@ class DeDRM(FileTypePlugin):
             print("{0} v{1}: Encryption '{2}' is unsupported.".format(PLUGIN_NAME, PLUGIN_VERSION, pdf_encryption))
             return path_to_ebook
 
-
     def KindleMobiDecrypt(self,path_to_ebook):
 
         # add the alfcrypto directory to sys.path so alfcrypto.py
@@ -920,9 +911,9 @@ class DeDRM(FileTypePlugin):
         pids = dedrmprefs['pids']
         serials = dedrmprefs['serials']
         for android_serials_list in dedrmprefs['androidkeys'].values():
-            #print android_serials_list
+            # print android_serials_list
             serials.extend(android_serials_list)
-        #print serials
+        # print serials
         androidFiles = []
         kindleDatabases = list(dedrmprefs['kindlekeys'].items())
 
@@ -978,7 +969,7 @@ class DeDRM(FileTypePlugin):
                     traceback.print_exc()
                     pass
             if not decoded:
-                #if you reached here then no luck raise and exception
+                # if you reached here then no luck raise and exception
                 print("{0} v{1}: Ultimately failed to decrypt after {2:.1f} seconds. Read the FAQs at noDRM's repository: https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md".format(PLUGIN_NAME, PLUGIN_VERSION,time.time()-self.starttime))
                 raise DeDRMError("{0} v{1}: Ultimately failed to decrypt after {2:.1f} seconds. Read the FAQs at noDRM's repository: https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md".format(PLUGIN_NAME, PLUGIN_VERSION,time.time()-self.starttime))
 
@@ -987,7 +978,6 @@ class DeDRM(FileTypePlugin):
         of.close()
         book.cleanup()
         return of.name
-
 
     def eReaderDecrypt(self,path_to_ebook):
 
@@ -1015,7 +1005,6 @@ class DeDRM(FileTypePlugin):
 
         print("{0} v{1}: Ultimately failed to decrypt after {2:.1f} seconds. Read the FAQs at noDRM's repository: https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md".format(PLUGIN_NAME, PLUGIN_VERSION,time.time()-self.starttime))
         raise DeDRMError("{0} v{1}: Ultimately failed to decrypt after {2:.1f} seconds. Read the FAQs at noDRM's repository: https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md".format(PLUGIN_NAME, PLUGIN_VERSION, time.time()-self.starttime))
-
 
     def run(self, path_to_ebook):
 

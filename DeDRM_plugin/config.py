@@ -1131,7 +1131,7 @@ class AddAdeptDialog():
         try:
             from adobekey import adeptkeys
             if iswindows or isosx:
-                defaultkeys, defaultnames = adeptkeys()
+                defaultkeys, defaultnames = adeptkeys(".", "")
             else:  # linux
                 defaultkeys, defaultnames = adeptkeys(parent.parent.alfdir, parent.getwineprefix())
 
@@ -1219,15 +1219,12 @@ class AddKindleDialog(QDialog):
         self.setLayout(layout)
 
         try:
+            from kindlekey import kindlekeys
+
             if iswindows or isosx:
-                from kindlekey import kindlekeys
-
-                defaultkeys = kindlekeys()
-            else: # linux
-                from wineutils import WineGetKeys
-
-                scriptpath = os.path.join(parent.parent.alfdir,"kindlekey.py")
-                defaultkeys, defaultnames = WineGetKeys(scriptpath, ".k4i",parent.getwineprefix())
+                defaultkeys = kindlekeys([], ".", "")
+            else:  # linux
+                defaultkeys = kindlekeys([], parent.parent.alfdir, parent.getwineprefix())
 
             self.default_key = defaultkeys[0]
         except:
@@ -1270,7 +1267,6 @@ class AddKindleDialog(QDialog):
     @property
     def key_value(self):
         return self.default_key
-
 
     def accept(self):
         if len(self.key_name) == 0 or self.key_name.isspace():
